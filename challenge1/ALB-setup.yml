@@ -1,0 +1,243 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description:
+  This template deploys an Application Load Balancer for our services.
+
+Parameters:
+  EnvironmentName:
+    Description: Name of Services Load Balancer
+    Type: String
+    Default: 'dev'
+  ServicePort:
+    Description: Port for micro-service
+    Type: Number
+    Default: 39010
+  PublicPort:
+    Description: Port for unsecured public facing
+    Type: Number
+    Default: 80
+  SecuredPublicPort:
+    Description: Port for secured public facing
+    Type: Number
+    Default: 443
+  CertificateArn:
+    Description: Certificate ARN required for HTTPS
+    Type: String
+    Default: 'asdasdasdadsa'
+  ServiceDeregisterTime:
+    Description: Default deregisteration time for ALB
+    Type: Number
+    Default: 30
+  HealthCheckIntervalTime:
+    Description: Default time between successive health checks
+    Type: Number
+    Default: 300
+  LoadBalancerTimeout:
+    Description: Default timeout for the load balancers
+    Type: Number
+    Default: 600
+  SSLSecurityPolicy:
+    Description: Name of SSL Policy
+    Type: String
+    Default: 'ELBSecurityPolicy-TLS-1-1-2017-01'
+
+Resources:
+
+  AppLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub '${EnvironmentName}-lb-webapp'
+      Subnets:
+        - !ImportValue 'dev-VPC-setup-PublicSubnet1'
+        - !ImportValue 'dev-VPC-setup-PublicSubnet2'
+      LoadBalancerAttributes:
+        - Key: idle_timeout.timeout_seconds
+          Value: !Ref 'LoadBalancerTimeout'
+      SecurityGroups:
+        - !ImportValue 'dev-VPC-setup-AppSecurityGroup'
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}-lb-webapp'
+
+  AppLoadBalancerListener1:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref 'AppLoadBalancer'
+      Port: !Ref 'PublicPort'
+      Protocol: HTTP
+      DefaultActions:
+        - Type: redirect
+          RedirectConfig:
+            Protocol: HTTPS
+            Host: '#{host}'
+            Query: '#{query}'
+            Path: '/#{domainPath}'
+            Port: '443'
+            StatusCode: HTTP_301
+
+  AppLoadBalancerListener2:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref 'AppLoadBalancer'
+      Port: !Ref 'SecuredPublicPort'
+      Protocol: HTTPS
+      Certificates:
+        - CertificateArn: !Ref 'CertificateArn'
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref 'AppTargetGroup'
+      SslPolicy: !Ref 'SSLSecurityPolicy'
+
+  AppTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub '${EnvironmentName}-tg-app'
+      VpcId: !ImportValue 'dev-VPC-setup-VPC'
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: !Ref 'ServiceDeregisterTime'
+      HealthCheckIntervalSeconds: !Ref 'HealthCheckIntervalTime'
+      HealthCheckPath: '/'
+      Port: !Ref 'PublicPort'
+      Protocol: HTTP
+
+  GatewayLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub '${EnvironmentName}-lb-gateway'
+      Subnets:
+        - !ImportValue 'dev-VPC-setup-PublicSubnet1'
+        - !ImportValue 'dev-VPC-setup-PublicSubnet2'
+      LoadBalancerAttributes:
+        - Key: idle_timeout.timeout_seconds
+          Value: !Ref 'LoadBalancerTimeout'
+      SecurityGroups:
+        - !ImportValue 'dev-VPC-setup-GatewaySecurityGroup'
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}-lb-gateway'
+
+  GatewayLoadBalancerListener1:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref 'GatewayLoadBalancer'
+      Port: !Ref 'PublicPort'
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref 'GatewayTargetGroup'
+
+  GatewayLoadBalancerListener2:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref 'GatewayLoadBalancer'
+      Port: !Ref 'SecuredPublicPort'
+      Protocol: HTTPS
+      Certificates:
+        - CertificateArn: !Ref 'CertificateArn'
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref 'GatewayTargetGroup'
+      SslPolicy: !Ref 'SSLSecurityPolicy'
+
+  GatewayTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub '${EnvironmentName}-tg-gateway'
+      VpcId: !ImportValue 'dev-VPC-setup-VPC'
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: !Ref 'ServiceDeregisterTime'
+      HealthCheckIntervalSeconds: !Ref 'HealthCheckIntervalTime'
+      HealthCheckPath: '/ping'
+      Port: !Ref 'PublicPort'
+      Protocol: HTTP
+
+  ServicesLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub '${EnvironmentName}-lb-services'
+      Scheme: "internal"
+      LoadBalancerAttributes:
+        - Key: idle_timeout.timeout_seconds
+          Value: !Ref 'LoadBalancerTimeout'
+      Subnets:
+        - !ImportValue 'dev-VPC-setup-PrivateSubnet1'
+        - !ImportValue 'dev-VPC-setup-PrivateSubnet2'
+      SecurityGroups:
+        - !ImportValue 'dev-VPC-setup-ServicesSecurityGroup'
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}-lb-services'
+
+  ServiceLoadBalancerListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref 'ServicesLoadBalancer'
+      Port: !Ref 'ServicePort'
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref 'ServiceTargetGroup'
+
+  ServiceTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub '${EnvironmentName}-tg-service'
+      VpcId: !ImportValue 'dev-VPC-setup-VPC'
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: !Ref 'ServiceDeregisterTime'
+      HealthCheckIntervalSeconds: !Ref 'HealthCheckIntervalTime'
+      HealthCheckPath: '/ping'
+      Port: !Ref 'ServicePort'
+      Protocol: HTTP
+
+Outputs:
+  ServicesLoadBalancer:
+    Description: A reference to the Application Load Balancer for services
+    Value: !GetAtt ServicesLoadBalancer.LoadBalancerName
+    Export:
+      Name: !Sub '${AWS::StackName}-ServicesLBName'
+
+  GatewayLoadBalancer:
+    Description: A reference to the Application Load Balancer for gateway
+    Value: !GetAtt GatewayLoadBalancer.LoadBalancerName
+    Export:
+      Name: !Sub '${AWS::StackName}-GatewayLBName'
+
+  AppLoadBalancer:
+    Description: A reference to the Application Load Balancer for web app
+    Value: !GetAtt AppLoadBalancer.LoadBalancerName
+    Export:
+      Name: !Sub '${AWS::StackName}-AppLBName'
+
+  AppLoadBalancerARN:
+    Description: A reference to the Application Load Balancer for web app arn
+    Value: !Ref 'AppLoadBalancer'
+    Export:
+      Name: !Sub '${AWS::StackName}-AppLBARN'
+
+  GatewayLoadBalancerARN:
+    Description: A reference to the Application Load Balancer for gateway arn
+    Value: !Ref 'GatewayLoadBalancer'
+    Export:
+      Name: !Sub '${AWS::StackName}-GatewayLBARN'
+
+  ServiceTargetGroup:
+    Description: A reference to a service target group
+    Value: !Ref 'ServiceTargetGroup'
+    Export:
+      Name: !Sub '${AWS::StackName}-ServiceTGArn'
+
+  GatewayTargetGroup:
+    Description: A reference to a gateway target group
+    Value: !Ref 'GatewayTargetGroup'
+    Export:
+      Name: !Sub '${AWS::StackName}-GatewayTGArn'
+
+  WebappTargetGroup:
+    Description: A reference to a web app target group
+    Value: !Ref 'AppTargetGroup'
+    Export:
+      Name: !Sub '${AWS::StackName}-AppTGArn'

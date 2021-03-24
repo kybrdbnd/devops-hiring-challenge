@@ -1,0 +1,45 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description:
+  This template creates log groups
+
+Parameters:
+
+  ServiceName:
+    Description: micro-service name
+    Type: String
+    Default: 'dev-service'
+
+  GatewayServiceName:
+    Description: gateway micro-service name
+    Type: String
+    Default: 'dev-gateway'
+
+  WebappServiceName:
+    Description: webapp service name
+    Type: String
+    Default: 'dev-webapp'
+
+  LogRetentionPeriod:
+    Description: Retention Period of CloudWatch Logs
+    Type: Number
+    Default: 7
+
+Resources:
+
+  ServiceCloudWatchLogsGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Ref 'ServiceName'
+      RetentionInDays: !Ref LogRetentionPeriod
+
+  GatewayCloudWatchLogsGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Ref 'GatewayServiceName'
+      RetentionInDays: !Ref LogRetentionPeriod
+
+  WebappCloudWatchLogsGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Ref 'WebappServiceName'
+      RetentionInDays: !Ref LogRetentionPeriod

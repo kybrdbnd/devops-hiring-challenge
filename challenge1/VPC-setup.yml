@@ -1,0 +1,648 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description:
+  This template deploys a VPC for dev env, with a public and private subnets spread
+  across 2 Availability Zones. It deploys/creates IAM Role, an Internet Gateway,
+  2 NAT Gateway with a default route on the public subnets, SG's and Routing Table.
+
+Parameters:
+  EnvironmentName:
+    Description: An environment name that will be prefixed to resource names
+    Type: String
+    Default: 'dev'
+
+  IAMRoleName:
+    Description: IAM Role for Automatic Environment Setup
+    Type: String
+    Default: 'dev-Automate'
+
+  VpcCIDR:
+    Description: IP range (CIDR notation) for this VPC
+    Type: String
+    Default: 10.0.0.0/16
+
+  PrivateSubnet1CIDR:
+    Description: IP range (CIDR notation) for the private subnet in the first Availability Zone
+    Type: String
+    Default: 10.0.41.0/24
+
+  PrivateSubnet2CIDR:
+    Description: IP range (CIDR notation) for the private subnet in the second Availability Zone
+    Type: String
+    Default: 10.0.42.0/24
+
+  PublicSubnet1CIDR:
+    Description: IP range (CIDR notation) for the public subnet in the first Availability Zone
+    Type: String
+    Default: 10.0.21.0/24
+
+  PublicSubnet2CIDR:
+    Description: IP range (CIDR notation) for the public subnet in the second Availability Zone
+    Type: String
+    Default: 10.0.22.0/24
+
+Resources:
+
+  RolePolicies:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyName: 'AWS-Services'
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: 'Allow'
+            Action: 'ec2:*'
+            Resource: '*'
+          - Effect: 'Allow'
+            Action: 'elasticloadbalancing:*'
+            Resource: '*'
+          - Effect: 'Allow'
+            Action: 'ssm:*'
+            Resource: '*'
+          - Effect: 'Allow'
+            Action: 's3:*'
+            Resource: '*'
+          - Effect: 'Allow'
+            Action: 'application-autoscaling:*'
+            Resource: '*'
+          - Effect: 'Allow'
+            Action: 'cloudwatch:*'
+            Resource: '*'
+          - Effect: 'Allow'
+            Action: 'ssmmessages:*'
+            Resource: '*'
+          - Effect: 'Allow'
+            Action: 'ec2messages:*'
+            Resource: '*'
+          - Effect: 'Allow'
+            Action: 'iam:*'
+            Resource: '*'
+          - Effect: 'Allow'
+            Action: 'sns:*'
+            Resource: '*'
+      Roles:
+        - Ref: 'RootRole'
+
+  RootRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: !Join
+        - '-'
+        - - !Ref 'AWS::Region'
+          - !Ref 'IAMRoleName'
+
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: 'Allow'
+            Principal:
+              Service:
+                - 'ec2.amazonaws.com'
+            Action:
+              - 'sts:AssumeRole'
+      Path: '/'
+
+  EC2InstanceProfile:
+    Type: 'AWS::IAM::InstanceProfile'
+    Properties:
+      Path: '/'
+      Roles:
+        - !Ref 'RootRole'
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref 'VpcCIDR'
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}.vpc'
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}.gateway'
+
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref 'InternetGateway'
+      VpcId: !Ref 'VPC'
+
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref 'VPC'
+      AvailabilityZone: !Select
+        - 0
+        - !GetAZs ''
+      CidrBlock: !Ref 'PrivateSubnet1CIDR'
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}.private.az-1'
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref 'VPC'
+      AvailabilityZone: !Select
+        - 1
+        - !GetAZs ''
+      CidrBlock: !Ref 'PrivateSubnet2CIDR'
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}.private.az-2'
+
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref 'VPC'
+      AvailabilityZone: !Select
+        - 0
+        - !GetAZs ''
+      CidrBlock: !Ref 'PublicSubnet1CIDR'
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}.public.az-1'
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref 'VPC'
+      AvailabilityZone: !Select
+        - 1
+        - !GetAZs ''
+      CidrBlock: !Ref 'PublicSubnet2CIDR'
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}.public.az-2'
+
+  BastionSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub '${EnvironmentName}.sg.bastion'
+      GroupDescription: Security group for bastion
+      VpcId: !Ref 'VPC'
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}.sg.bastion'
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: '22'
+          ToPort: '22'
+          CidrIp: '1.1.1.1/32'
+
+  BastionSecurityGroupEgress1:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !Ref 'BastionSecurityGroup'
+      IpProtocol: tcp
+      FromPort: '22'
+      ToPort: '22'
+      DestinationSecurityGroupId: !Ref 'ContainerSecurityGroup'
+
+  BastionSecurityGroupEgress2:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !Ref 'BastionSecurityGroup'
+      IpProtocol: tcp
+      FromPort: '22'
+      ToPort: '22'
+      DestinationSecurityGroupId: !Ref 'AppSecurityGroup'
+
+  BastionSecurityGroupEgress3:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !Ref 'BastionSecurityGroup'
+      IpProtocol: tcp
+      FromPort: '22'
+      ToPort: '22'
+      DestinationSecurityGroupId: !Ref 'GatewayContainerSecurityGroup'
+
+  AppSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub '${EnvironmentName}.sg.app'
+      GroupDescription: Security group for web app
+      VpcId: !Ref 'VPC'
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}.sg.app'
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: '80'
+          ToPort: '80'
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: '443'
+          ToPort: '443'
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: '80'
+          ToPort: '80'
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: '443'
+          ToPort: '443'
+          CidrIp: 0.0.0.0/0
+
+  AppSecurityGroupEgress:
+    Type: 'AWS::EC2::SecurityGroupEgress'
+    Properties:
+      GroupId: !Ref 'AppSecurityGroup'
+      IpProtocol: tcp
+      FromPort: '32768'
+      ToPort: '65535'
+      DestinationSecurityGroupId: !Ref 'AppContainerSecurityGroup'
+
+  AppContainerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub '${EnvironmentName}.sg.app.container'
+      GroupDescription: Security group for web app container
+      VpcId: !Ref 'VPC'
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}.sg.app.container'
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: '80'
+          ToPort: '80'
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: '443'
+          ToPort: '443'
+          CidrIp: 0.0.0.0/0
+
+  AppContainerSecurityGroupIngress1:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref 'AppContainerSecurityGroup'
+      IpProtocol: tcp
+      FromPort: '22'
+      ToPort: '22'
+      SourceSecurityGroupId: !Ref 'BastionSecurityGroup'
+
+  AppContainerSecurityGroupIngress2:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref 'AppContainerSecurityGroup'
+      IpProtocol: tcp
+      FromPort: '32768'
+      ToPort: '65535'
+      SourceSecurityGroupId: !Ref 'AppSecurityGroup'
+
+  GatewaySecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub '${EnvironmentName}.sg.gateway'
+      GroupDescription: Security group for gateway
+      VpcId: !Ref 'VPC'
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}.sg.gateway'
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: '80'
+          ToPort: '80'
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: '443'
+          ToPort: '443'
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: '80'
+          ToPort: '80'
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: '443'
+          ToPort: '443'
+          CidrIp: 0.0.0.0/0
+
+  GatewaySecurityGroupEgress:
+    Type: 'AWS::EC2::SecurityGroupEgress'
+    Properties:
+      GroupId: !Ref 'GatewaySecurityGroup'
+      IpProtocol: tcp
+      FromPort: '32768'
+      ToPort: '65535'
+      DestinationSecurityGroupId: !Ref 'GatewayContainerSecurityGroup'
+
+  GatewayContainerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub '${EnvironmentName}.sg.gateway.container'
+      GroupDescription: Security group for gateway containers
+      VpcId: !Ref 'VPC'
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}.sg.gateway.container'
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: '80'
+          ToPort: '80'
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: '443'
+          ToPort: '443'
+          CidrIp: 0.0.0.0/0
+
+  GatewayContainerSecurityGroupIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref 'GatewayContainerSecurityGroup'
+      IpProtocol: tcp
+      FromPort: '22'
+      ToPort: '22'
+      SourceSecurityGroupId: !Ref 'BastionSecurityGroup'
+
+  GatewayContainerSecurityGroupIngress1:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref 'GatewayContainerSecurityGroup'
+      IpProtocol: tcp
+      FromPort: '32768'
+      ToPort: '65535'
+      SourceSecurityGroupId: !Ref 'GatewaySecurityGroup'
+
+  ServicesSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub '${EnvironmentName}.sg.services'
+      GroupDescription: Security group for backend services
+      VpcId: !Ref 'VPC'
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}.sg.services'
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: '39010'
+          ToPort: '39090'
+          CidrIp: !Ref 'VpcCIDR'
+
+  ServicesSecurityGroupEgress:
+    Type: 'AWS::EC2::SecurityGroupEgress'
+    Properties:
+      GroupId: !Ref 'ServicesSecurityGroup'
+      IpProtocol: tcp
+      FromPort: '32768'
+      ToPort: '65535'
+      DestinationSecurityGroupId: !Ref 'ContainerSecurityGroup'
+
+  ContainerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub '${EnvironmentName}.sg.container'
+      GroupDescription: Security group for container
+      VpcId: !Ref 'VPC'
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}.sg.container'
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: '80'
+          ToPort: '80'
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: '443'
+          ToPort: '443'
+          CidrIp: 0.0.0.0/0
+
+  ContainerSecurityGroupIngress1:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref 'ContainerSecurityGroup'
+      IpProtocol: tcp
+      FromPort: '22'
+      ToPort: '22'
+      SourceSecurityGroupId: !Ref 'BastionSecurityGroup'
+
+  ContainerSecurityGroupIngress2:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref 'ContainerSecurityGroup'
+      IpProtocol: tcp
+      FromPort: '32768'
+      ToPort: '65535'
+      SourceSecurityGroupId: !Ref 'ServicesSecurityGroup'
+
+  ContainerSecurityGroupEgress:
+    Type: 'AWS::EC2::SecurityGroupEgress'
+    Properties:
+      GroupId: !Ref 'ContainerSecurityGroup'
+      IpProtocol: tcp
+      FromPort: '32768'
+      ToPort: '65535'
+      DestinationSecurityGroupId: !Ref 'ServicesSecurityGroup'
+
+  ContainerSecurityGroupEgress1:
+    Type: 'AWS::EC2::SecurityGroupEgress'
+    Properties:
+      GroupId: !Ref 'ContainerSecurityGroup'
+      IpProtocol: tcp
+      FromPort: '3000'
+      ToPort: '3000'
+      DestinationSecurityGroupId: !Ref 'DatabaseSecurityGroup'
+
+  DatabaseSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub '${EnvironmentName}.sg.database'
+      GroupDescription: Security group for database
+      VpcId: !Ref 'VPC'
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}.sg.database'
+
+  DatabaseSecurityGroupIngress1:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref 'DatabaseSecurityGroup'
+      IpProtocol: tcp
+      FromPort: '3000'
+      ToPort: '3000'
+      SourceSecurityGroupId: !Ref 'ServicesSecurityGroup'
+
+  NatGateway1EIP:
+    Type: AWS::EC2::EIP
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      Domain: vpc
+
+  NatGateway2EIP:
+    Type: AWS::EC2::EIP
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      Domain: vpc
+
+  NatGateway1:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatGateway1EIP.AllocationId
+      SubnetId: !Ref PublicSubnet1
+
+  NatGateway2:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatGateway2EIP.AllocationId
+      SubnetId: !Ref PublicSubnet2
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref 'VPC'
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}.public.routes'
+
+  DefaultPublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref 'PublicRouteTable'
+      SubnetId: !Ref 'PublicSubnet1'
+
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref 'PublicRouteTable'
+      SubnetId: !Ref 'PublicSubnet2'
+
+Outputs:
+  EnvironmentName:
+    Description: Environment Name
+    Value: !Ref 'EnvironmentName'
+    Export:
+      Name: !Sub '${AWS::StackName}-EnvName'
+
+  IAMRole:
+    Description: IAM Role for the automation process
+    Value: !Ref 'RootRole'
+    Export:
+      Name: !Sub '${AWS::StackName}-IAMRole'
+
+  IAMRoleArn:
+    Description: IAM Role arn
+    Value: !GetAtt 'RootRole.Arn'
+    Export:
+      Name: !Sub '${AWS::StackName}-IAMRoleARN'
+
+  VPC:
+    Description: A reference to the created VPC
+    Value: !Ref 'VPC'
+    Export:
+      Name: !Sub '${AWS::StackName}-VPC'
+
+  PublicSubnets:
+    Description: A list of the public subnets
+    Value: !Join
+      - ','
+      - - !Ref 'PublicSubnet1'
+        - !Ref 'PublicSubnet2'
+
+  PrivateSubnets:
+    Description: A list of the private subnets
+    Value: !Join
+      - ','
+      - - !Ref 'PrivateSubnet1'
+        - !Ref 'PrivateSubnet2'
+
+  PrivateSubnet1:
+    Description: A reference to the service private subnet in the 1st Availability Zone
+    Value: !Ref 'PrivateSubnet1'
+    Export:
+      Name: !Sub '${AWS::StackName}-PrivateSubnet1'
+
+  PrivateSubnet2:
+    Description: A reference to the service private subnet in the 2nd Availability Zone
+    Value: !Ref 'PrivateSubnet2'
+    Export:
+      Name: !Sub '${AWS::StackName}-PrivateSubnet2'
+
+  PublicSubnet1:
+    Description: A reference to the public subnet in the 1st Availability Zone
+    Value: !Ref 'PublicSubnet1'
+    Export:
+      Name: !Sub "${AWS::StackName}-PublicSubnet1"
+
+  PublicSubnet2:
+    Description: A reference to the public subnet in the 2nd Availability Zone
+    Value: !Ref 'PublicSubnet2'
+    Export:
+      Name: !Sub "${AWS::StackName}-PublicSubnet2"
+
+  AppSecurityGroup:
+    Description: Security group for webapp ALB
+    Value: !Ref 'AppSecurityGroup'
+    Export:
+      Name: !Sub '${AWS::StackName}-AppSecurityGroup'
+
+  AppContainerSecurityGroup:
+    Description: Security group for webapp containers
+    Value: !Ref 'AppContainerSecurityGroup'
+    Export:
+      Name: !Sub '${AWS::StackName}-AppContainerSecurityGroup'
+
+  GatewaySecurityGroup:
+    Description: Security group for gateway ALB
+    Value: !Ref 'GatewaySecurityGroup'
+    Export:
+      Name: !Sub '${AWS::StackName}-GatewaySecurityGroup'
+
+  GatewayContainerSecurityGroup:
+    Description: Security group for gateway containers
+    Value: !Ref 'GatewayContainerSecurityGroup'
+    Export:
+      Name: !Sub '${AWS::StackName}-GatewayContainerSecurityGroup'
+
+  ServicesSecurityGroup:
+    Description: Security group for services ALB
+    Value: !Ref 'ServicesSecurityGroup'
+    Export:
+      Name: !Sub '${AWS::StackName}-ServicesSecurityGroup'
+
+  ContainerSecurityGroup:
+    Description: Security group for containers
+    Value: !Ref 'ContainerSecurityGroup'
+    Export:
+      Name: !Sub '${AWS::StackName}-ContainerSecurityGroup'
+
+  BastionSecurityGroup:
+    Description: Security group for Bastion
+    Value: !Ref 'BastionSecurityGroup'
+    Export:
+      Name: !Sub '${AWS::StackName}-BastionSecurityGroup'
+
+  DatabaseSecurityGroup:
+    Description: Security group for database
+    Value: !Ref 'DatabaseSecurityGroup'
+    Export:
+      Name: !Sub '${AWS::StackName}-DatabaseSecurityGroup'
+
+  EC2InstanceProfile:
+    Description: EC2 profile instance for launching EC2 instances
+    Value: !Ref 'EC2InstanceProfile'
+    Export:
+      Name: !Sub '${AWS::StackName}-EC2InstanceProfile'
+
+  NATEIPs:
+    Description: NAT Elastic IPs
+    Value: !Join
+      - ','
+      - - !Ref 'NatGateway1EIP'
+        - !Ref 'NatGateway2EIP'

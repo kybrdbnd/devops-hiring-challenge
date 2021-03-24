@@ -1,0 +1,53 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description:
+  This template creates a RDS Instance
+
+Parameters:
+
+  StorageSize:
+    Description: Storage size for DB
+    Type: String
+    Default: 30
+
+  RetentionPeriod:
+    Description: Retention Period
+    Type: String
+    Default: 15
+
+  DBInstanceSize:
+    Description: Instance size for DB
+    Type: String
+    Default: 'db.m4.large'
+
+  DBEngine:
+    Description: DB Engine
+    Type: String
+    Default: 'mysql'
+
+
+Resources:
+
+  DBInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      AllocatedStorage: !Ref 'StorageSize'
+      AllowMajorVersionUpgrade: Boolean
+      AssociatedRoles:
+        - FeatureName: 'abc'
+          RoleArn: 'axb'
+      AutoMinorVersionUpgrade: True
+      BackupRetentionPeriod: !Ref 'RetentionPeriod'
+      CopyTagsToSnapshot: True
+      DBInstanceClass: !Ref 'DBInstanceSize'
+      DBName: MySQL
+      DBSubnetGroupName: !ImportValue 'dev-VPC-setup-PrivateSubnet1'
+      DeleteAutomatedBackups: False
+      DeletionProtection: True
+      EnableIAMDatabaseAuthentication: True
+      EnablePerformanceInsights: True
+      Engine: !Ref 'DBEngine'
+      MultiAZ: True
+      PubliclyAccessible: False
+      StorageType: 'gp2'
+      VPCSecurityGroups:
+        - !ImportValue 'dev-VPC-setup-DatabaseSecurityGroup'

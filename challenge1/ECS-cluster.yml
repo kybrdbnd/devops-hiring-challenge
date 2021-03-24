@@ -1,0 +1,79 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description:
+  This template deploys the ECS clusters
+
+Parameters:
+  EnvironmentName:
+    Description: An environment name that will be prefixed to resource names
+    Type: String
+    Default: 'dev'
+
+  AppClusterName:
+    Type: String
+    Description: Name of ECS cluster for App
+    Default: app
+
+  GatewayClusterName:
+    Type: String
+    Description: Name of ECS cluster for Gateway
+    Default: gateway
+
+  ServicesClusterName:
+    Type: String
+    Description: Name of ECS cluster for Services
+    Default: services
+
+Resources:
+
+  AppCluster:
+    Type: 'AWS::ECS::Cluster'
+    Properties:
+      ClusterName: !Sub '${EnvironmentName}_${AppClusterName}'
+      ClusterSettings:
+        - Name: 'containerInsights'
+          Value: 'disabled'
+
+  GatewayCluster:
+    Type: 'AWS::ECS::Cluster'
+    Properties:
+      ClusterName: !Sub '${EnvironmentName}_${GatewayClusterName}'
+      ClusterSettings:
+        - Name: 'containerInsights'
+          Value: 'disabled'
+
+  ServicesCluster:
+    Type: 'AWS::ECS::Cluster'
+    Properties:
+      ClusterName: !Sub '${EnvironmentName}_${ServicesClusterName}'
+      ClusterSettings:
+        - Name: 'containerInsights'
+          Value: 'disabled'
+
+Outputs:
+
+  ECSClusters:
+    Description: ECS Cluster
+    Value: !Join
+      - ','
+      - - !Ref 'AppCluster'
+        - !Ref 'GatewayCluster'
+        - !Ref 'ServicesCluster'
+
+  AppCluster:
+    Description: App cluster name
+    Value: !Ref 'AppCluster'
+    Export:
+      Name: !Sub '${AWS::StackName}-AppClusterName'
+
+  GatewayCluster:
+    Description: Gateway cluster name
+    Value: !Ref 'GatewayCluster'
+    Export:
+      Name: !Sub '${AWS::StackName}-GatewayClusterName'
+
+  ServicesCluster:
+    Description: Services cluster name
+    Value: !Ref 'ServicesCluster'
+    Export:
+      Name: !Sub '${AWS::StackName}-ServicesClusterName'

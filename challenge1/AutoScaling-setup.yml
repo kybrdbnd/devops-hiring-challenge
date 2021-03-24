@@ -1,0 +1,394 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description:
+  This template creates AS Groups and Application AS Groups
+
+Parameters:
+  EnvironmentName:
+    Description: An environment name that will be prefixed to resource names
+    Type: String
+    Default: 'dev'
+
+  ECSAMIImage:
+    Description: AMI for ECS EC2 instance
+    Type: String
+    Default: 'ami-078c97cf1cefd1b38'
+
+  InstanceSize:
+    Description: Default EC2 instance size
+    Type: String
+    Default: 't3a.small'
+
+  GatewayKeyName:
+    Description: Name of EC2 KeyPair for SSH into gateway instances
+    Type: String
+    Default: 'dev.gateway'
+
+  AppKeyName:
+    Description: Name of EC2 KeyPair for SSH into app instances,
+    Type: String
+    Default: 'dev.app'
+
+  ServiceKeyName:
+    Description: Name of EC2 KeyPair for SSH into service instances
+    Type: String
+    Default: 'dev.service'
+
+  BastionKeyName:
+    Description: Name of EC2 KeyPair for SSH into bastion instances
+    Type: String
+    Default: 'dev.bastion'
+
+  ClusterScaleUpSize:
+    Description: no of clusters to scale up
+    Type: Number
+    Default: 1
+
+  ClusterScaleDownSize:
+    Description: no of clusters to scale down
+    Type: Number
+    Default: -1
+
+Resources:
+
+  EC2AutoScaleSNSTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      Subscription:
+        - Endpoint: "abc@abc.com"
+          Protocol: "email"
+      TopicName: 'dev-EC2-AutoScale-SNSTopic'
+
+  BastionASGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: !Sub '${EnvironmentName}.bastion.asg'
+      LaunchConfigurationName: !Ref 'BastionLaunchConfiguration'
+      MinSize: '2'
+      MaxSize: '2'
+      VPCZoneIdentifier:
+        - !ImportValue  'dev-VPC-setup-PublicSubnet1'
+        - !ImportValue  'dev-VPC-setup-PublicSubnet2'
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}.bastion.asg'
+          PropagateAtLaunch: 'true'
+
+  BastionLaunchConfiguration:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      LaunchConfigurationName: !Sub '${EnvironmentName}.bastion.lc.1'
+      ImageId: !Ref 'ECSAMIImage'
+      InstanceType: !Ref 'InstanceSize'
+      KeyName: !Ref 'BastionKeyName'
+      InstanceMonitoring: 'false'
+      SecurityGroups:
+        - !ImportValue 'dev-VPC-Setup-BastionSecurityGroup'
+      IamInstanceProfile: !ImportValue 'dev-VPC-setup-EC2InstanceProfile'
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 30
+            VolumeType: gp2
+
+  GatewayASGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: !Sub '${EnvironmentName}.gateway.asg'
+      LaunchConfigurationName: !Ref 'GatewayLaunchConfiguration'
+      MinSize: '2'
+      MaxSize: '6'
+      VPCZoneIdentifier:
+        - !ImportValue  'dev-VPC-setup-PublicSubnet1'
+        - !ImportValue  'dev-VPC-setup-PublicSubnet2'
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}.gateway.asg'
+          PropagateAtLaunch: 'true'
+
+  GatewayLaunchConfiguration:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      LaunchConfigurationName: !Sub '${EnvironmentName}.gateway.lc.1'
+      ImageId: !Ref 'ECSAMIImage'
+      InstanceType: !Ref 'InstanceSize'
+      KeyName: !Ref 'GatewayKeyName'
+      InstanceMonitoring: 'false'
+      SecurityGroups:
+        - !ImportValue 'dev-VPC-Setup-GatewayContainerSecurityGroup'
+      IamInstanceProfile: !ImportValue 'dev-VPC-setup-EC2InstanceProfile'
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 30
+            VolumeType: gp2
+      UserData: !Base64
+        Fn::Join:
+          - ''
+          - - "#!/bin/bash -xe\n"
+            - "echo ECS_CLUSTER="
+            - !ImportValue 'dev-ECS-cluster-GatewayClusterName'
+            - ">> /etc/ecs/ecs.config"
+            - "\n"
+            - "cd /tmp \n"
+            - "sudo yum install -y https://s3.amazonaws.com/ec2-downloads-windows/SSMAgent/latest/linux_amd64/amazon-ssm-agent.rpm \n"
+            - "sudo start amazon-ssm-agent"
+
+  GatewayClusterScaleOutPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AdjustmentType: ChangeInCapacity
+      PolicyType: 'StepScaling'
+      AutoScalingGroupName: !Ref 'GatewayASGroup'
+      EstimatedInstanceWarmup: '300'
+      MetricAggregationType: 'Average'
+      StepAdjustments:
+        - MetricIntervalLowerBound: "0"
+          MetricIntervalUpperBound: "10"
+          ScalingAdjustment: '1'
+        - MetricIntervalLowerBound: "10"
+          ScalingAdjustment: '2'
+
+  GatewayClusterScaleOutCPUAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Gateway Clusters CPU Utilization High
+      MetricName: CPUUtilization
+      Namespace: AWS/ECS
+      Statistic: Average
+      Period: '300'
+      EvaluationPeriods: '1'
+      Threshold: '70'
+      AlarmActions:
+        - !Ref 'GatewayClusterScaleOutPolicy'
+        - !Ref 'EC2AutoScaleSNSTopic'
+      Dimensions:
+        - Name: ClusterName
+          Value: !ImportValue  'dev-ECS-cluster-GatewayClusterName'
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+
+  GatewayClusterScaleInPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AdjustmentType: ChangeInCapacity
+      PolicyType: 'SimpleScaling'
+      AutoScalingGroupName: !Ref 'GatewayASGroup'
+      ScalingAdjustment: '-1'
+
+  GatewayClusterScaleInCPUAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Gateway Clusters CPU Utilization Normal
+      MetricName: CPUUtilization
+      Namespace: AWS/ECS
+      Statistic: Average
+      Period: '60'
+      EvaluationPeriods: '10'
+      Threshold: '35'
+      AlarmActions:
+        - !Ref 'GatewayClusterScaleInPolicy'
+      Dimensions:
+        - Name: ClusterName
+          Value: !ImportValue  'dev-ECS-cluster-GatewayClusterName'
+      ComparisonOperator: LessThanOrEqualToThreshold
+
+  WebappASGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: !Sub '${EnvironmentName}.webapp.asg'
+      LaunchConfigurationName: !Ref 'WebappLaunchConfiguration'
+      MinSize: '2'
+      MaxSize: '6'
+      VPCZoneIdentifier:
+        - !ImportValue  'dev-VPC-setup-PublicSubnet1'
+        - !ImportValue  'dev-VPC-setup-PublicSubnet2'
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}.webapp.asg'
+          PropagateAtLaunch: 'true'
+
+  WebappLaunchConfiguration:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      LaunchConfigurationName: !Sub '${EnvironmentName}.webapp.lc.1'
+      ImageId: !Ref 'ECSAMIImage'
+      InstanceType: !Ref 'InstanceSize'
+      KeyName: !Ref 'AppKeyName'
+      InstanceMonitoring: 'false'
+      SecurityGroups:
+        - !ImportValue 'dev-VPC-setup-AppContainerSecurityGroup'
+      IamInstanceProfile: !ImportValue 'dev-VPC-setup-EC2InstanceProfile'
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 30
+            VolumeType: gp2
+      UserData: !Base64
+        Fn::Join:
+          - ''
+          - - "#!/bin/bash -xe\n"
+            - "echo ECS_CLUSTER="
+            - !ImportValue 'dev-ECS-cluster-AppClusterName'
+            - ">> /etc/ecs/ecs.config"
+            - "\n"
+            - "cd /tmp \n"
+            - "sudo yum install -y https://s3.amazonaws.com/ec2-downloads-windows/SSMAgent/latest/linux_amd64/amazon-ssm-agent.rpm \n"
+            - "sudo start amazon-ssm-agent"
+
+  WebappClusterScaleOutPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AdjustmentType: ChangeInCapacity
+      PolicyType: 'StepScaling'
+      AutoScalingGroupName: !Ref 'WebappASGroup'
+      EstimatedInstanceWarmup: '300'
+      MetricAggregationType: 'Average'
+      StepAdjustments:
+        - MetricIntervalLowerBound: '0'
+          MetricIntervalUpperBound: '10'
+          ScalingAdjustment: '1'
+        - MetricIntervalLowerBound: '10'
+          ScalingAdjustment: '2'
+
+  WebappClusterScaleOutCPUAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Alarm if webapp cluster CPU is too high
+      Period: '300'
+      EvaluationPeriods: '1'
+      Statistic: Average
+      Threshold: '70'
+      AlarmActions:
+        - !Ref 'WebappClusterScaleOutPolicy'
+        - !Ref 'EC2AutoScaleSNSTopic'
+      Namespace: AWS/ECS
+      Dimensions:
+        - Name: ClusterName
+          Value: !ImportValue 'dev-ECS-cluster-AppClusterName'
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      MetricName: CPUUtilization
+
+  WebappClusterScaleInPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AdjustmentType: ChangeInCapacity
+      PolicyType: 'SimpleScaling'
+      AutoScalingGroupName: !Ref 'WebappASGroup'
+      ScalingAdjustment: '-1'
+
+  WebappClusterScaleInCPUAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Webapp Clusters CPU Utilization Normal
+      MetricName: CPUUtilization
+      Namespace: AWS/ECS
+      Statistic: Average
+      Period: '60'
+      EvaluationPeriods: '10'
+      Threshold: '35'
+      AlarmActions:
+        - !Ref 'WebappClusterScaleInPolicy'
+      Dimensions:
+        - Name: ClusterName
+          Value: !ImportValue  'dev-ECS-cluster-AppClusterName'
+      ComparisonOperator: LessThanOrEqualToThreshold
+
+  ServicesASGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: !Sub '${EnvironmentName}.services.asg'
+      LaunchConfigurationName: !Ref 'ServicesLaunchConfiguration'
+      MinSize: '2'
+      MaxSize: '6'
+      VPCZoneIdentifier:
+        - !ImportValue  'dev-VPC-setup-PrivateSubnet1'
+        - !ImportValue  'dev-VPC-setup-PrivateSubnet2'
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}.services.asg'
+          PropagateAtLaunch: 'true'
+
+  ServicesLaunchConfiguration:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      LaunchConfigurationName: !Sub '${EnvironmentName}.services.lc.1'
+      ImageId: !Ref 'ECSAMIImage'
+      InstanceType: !Ref 'InstanceSize'
+      KeyName: !Ref 'ServiceKeyName'
+      InstanceMonitoring: 'false'
+      SecurityGroups:
+        - !ImportValue 'dev-VPC-setup-ContainerSecurityGroup'
+      IamInstanceProfile: !ImportValue 'dev-VPC-setup-EC2InstanceProfile'
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 30
+            VolumeType: gp2
+      UserData: !Base64
+        Fn::Join:
+          - ''
+          - - "#!/bin/bash -xe\n"
+            - "echo ECS_CLUSTER="
+            - !ImportValue 'dev-ECS-cluster-ServicesClusterName'
+            - ">> /etc/ecs/ecs.config"
+            - "\n"
+            - "cd /tmp \n"
+            - "sudo yum install -y https://s3.amazonaws.com/ec2-downloads-windows/SSMAgent/latest/linux_amd64/amazon-ssm-agent.rpm \n"
+            - "sudo start amazon-ssm-agent"
+
+  ServicesClusterScaleOutPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AdjustmentType: ChangeInCapacity
+      PolicyType: 'StepScaling'
+      AutoScalingGroupName: !Ref 'ServicesASGroup'
+      EstimatedInstanceWarmup: '300'
+      MetricAggregationType: 'Maximum'
+      StepAdjustments:
+        - MetricIntervalLowerBound: '0'
+          MetricIntervalUpperBound: '20'
+          ScalingAdjustment: '1'
+        - MetricIntervalLowerBound: "20"
+          ScalingAdjustment: '2'
+
+  ServicesClusterScaleOutCPUAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: ServicesA Clusters CPU Utilization High
+      MetricName: CPUUtilization
+      Namespace: AWS/ECS
+      Statistic: Maximum
+      Period: '300'
+      EvaluationPeriods: '1'
+      Threshold: '80'
+      AlarmActions:
+        - !Ref 'ServicesClusterScaleOutPolicy'
+        - !Ref 'EC2AutoScaleSNSTopic'
+      Dimensions:
+        - Name: ClusterName
+          Value: !ImportValue 'dev-ECS-cluster-ServicesClusterName'
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+
+  ServicesClusterScaleInPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AdjustmentType: ChangeInCapacity
+      PolicyType: 'SimpleScaling'
+      AutoScalingGroupName: !Ref 'ServicesASGroup'
+      ScalingAdjustment: '-1'
+
+  ServicesClusterScaleInCPUAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: ServicesA Clusters CPU Utilization Normal
+      MetricName: CPUUtilization
+      Namespace: AWS/ECS
+      Statistic: Average
+      Period: '60'
+      EvaluationPeriods: '15'
+      Threshold: '35'
+      AlarmActions:
+        - !Ref 'ServicesClusterScaleInPolicy'
+      Dimensions:
+        - Name: ClusterName
+          Value: !ImportValue  'dev-ECS-cluster-ServicesClusterName'
+      ComparisonOperator: LessThanOrEqualToThreshold
