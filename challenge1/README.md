@@ -19,5 +19,7 @@ Multiple AWS Cloudformation yml templates are created
 
 Application Design
 
+![Application diagram](https://github.com/kybrdbnd/devops-hiring-challenge/blob/main/challenge1/hiring-challenge.png)
+
 
 Gateway is required in case we have need to have Oath2 kinda setup
