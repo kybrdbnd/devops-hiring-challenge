@@ -16,3 +16,8 @@ Multiple AWS Cloudformation yml templates are created
    mapping. This template will create appropriate application load balancers
 
 6. Log-setup.yml -> Basic log setup for our application
+
+Application Design
+
+
+Gateway is required in case we have need to have Oath2 kinda setup
